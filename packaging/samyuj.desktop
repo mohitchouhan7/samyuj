@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Samyuj
+GenericName=Phone & PC Companion
+Comment=Native Linux GTK 3 Desktop App for Motorola & Lenovo Smart Connect
+Exec=samyuj
+Icon=samyuj
+Terminal=false
+Categories=Utility;Network;FileTransfer;AudioVideo;
+Keywords=Samyuj;Phone;Companion;Webcam;Desktop;AppStream;NFS;FileTransfer;
+StartupNotify=true
+StartupWMClass=samyuj

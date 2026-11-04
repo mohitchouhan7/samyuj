@@ -1,0 +1,30 @@
+pkgname=samyuj
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Native GTK 4 / GTK 3 Desktop Companion for Smart Connect Android Devices"
+arch=('any')
+license=('Apache-2.0')
+depends=('python' 'python-gobject' 'python-cairo' 'gtk3' 'python-cryptography' 'python-pillow')
+optdepends=(
+  'python-aiortc: WebRTC video streaming'
+  'python-av: H.264/VP8 video decoding'
+  'python-mss: Fast X11 PC screen capture'
+  'python-bleak: BLE device discovery'
+  'v4l2loopback-dkms: Virtual webcam support'
+  'fuse3: Mount phone files in file manager'
+)
+
+package() {
+  local repo_root
+  repo_root="$(cd "$startdir/../.." && pwd)"
+  install -d "$pkgdir/usr/bin"
+  install -d "$pkgdir/usr/lib/samyuj/src"
+  install -d "$pkgdir/usr/share/applications"
+  install -d "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+  cp -r "$repo_root/src/samyuj" "$pkgdir/usr/lib/samyuj/src/"
+  find "$pkgdir/usr/lib/samyuj/src" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+  install -Dm755 "$repo_root/samyuj" "$pkgdir/usr/bin/samyuj"
+  install -Dm755 "$repo_root/samyuj-stop" "$pkgdir/usr/bin/samyuj-stop"
+  install -Dm644 "$repo_root/packaging/linux/samyuj.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/samyuj.svg"
+  install -Dm644 "$repo_root/packaging/samyuj.desktop" "$pkgdir/usr/share/applications/samyuj.desktop"
+}

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -uo pipefail
+CUR_UID="$(id -u)"
+PIDS=$(pgrep -u "$CUR_UID" -f "python3 -m samyuj" 2>/dev/null || pgrep -f "python3 -m samyuj" || true)
+if [ -z "$PIDS" ]; then
+    echo "samyuj-stop: no running instance"
+    exit 0
+fi
+echo "samyuj-stop: TERM -> $PIDS"
+kill -TERM $PIDS 2>/dev/null || true
+for _ in $(seq 1 10); do
+    sleep 0.5
+    NOW=$(pgrep -u "$CUR_UID" -f "python3 -m samyuj" 2>/dev/null || pgrep -f "python3 -m samyuj" || true)
+    if [ -z "$NOW" ]; then
+        echo "samyuj-stop: stopped gracefully"
+        exit 0
+    fi
+done
+echo "samyuj-stop: still alive - lazy-unmounting FUSE, then KILL"
+shopt -s nullglob dotglob
+MOUNT_BASE="${XDG_DATA_HOME:-$HOME/.local/share}/samyuj/mounts"
+for m in "$MOUNT_BASE"/*/live "$MOUNT_BASE"/*; do
+    [ -d "$m" ] || continue
+    fusermount3 -u -z "$m" 2>/dev/null || fusermount -u -z "$m" 2>/dev/null || true
+done
+kill -9 $PIDS 2>/dev/null || true
+pkill -u "$CUR_UID" -f 'wl-paste --watch' 2>/dev/null || true
+echo "samyuj-stop: force-stopped"

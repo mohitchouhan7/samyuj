@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system deps for media stack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libavformat-dev libavdevice-dev \
+            libavfilter-dev libavcodec-dev libswscale-dev libswresample-dev \
+            libvpx-dev libopus-dev cmake g++
+
+      - name: Install package with extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[media,ble]'
+          pip install pytest
+
+      - name: Byte-compile all sources
+        run: python -m compileall -q src tests
+
+      - name: Build optional native helper
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Run tests
+        run: python -m pytest tests -x -q
+
+  packaging-lint:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify no prebuilt binaries are committed
+        run: |
+          if find . -name '*.so' -not -path './build/*' | grep -q .; then
+            echo "ERROR: prebuilt .so found in source tree"; exit 1
+          fi
+      - name: Verify license metadata consistency
+        run: |
+          grep -q 'Apache-2.0' packaging/rpm/samyuj.spec
+          grep -q "license=('Apache-2.0')" packaging/arch/PKGBUILD
+          grep -q 'Apache-2.0' pyproject.toml
+
