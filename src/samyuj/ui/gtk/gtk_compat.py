@@ -56,7 +56,14 @@ try:
     import gi as _gi_mod
     _HAS_REAL_GI = True
 except ModuleNotFoundError:
-    for _sys_dist in ("/usr/lib/python3/dist-packages", f"/usr/lib64/python3.{sys.version_info.minor}/site-packages"):
+    for _sys_dist in (
+        "/usr/lib/python3/dist-packages",
+        f"/usr/lib64/python3.{sys.version_info.minor}/site-packages",
+        f"/usr/lib/python3.{sys.version_info.minor}/site-packages",
+        f"/run/current-system/sw/lib/python3.{sys.version_info.minor}/site-packages",
+        f"/usr/local/lib/python3.{sys.version_info.minor}/site-packages",
+        f"/usr/local/lib64/python3.{sys.version_info.minor}/site-packages",
+    ):
         if Path(_sys_dist, "gi").is_dir() and _sys_dist not in sys.path:
             sys.path.append(_sys_dist)
             try:

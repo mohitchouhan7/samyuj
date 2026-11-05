@@ -340,6 +340,7 @@ async def run_linux_setup_check(runtime: Any, root_dir: str | Path | None = None
     udp_buf = check_udp_buffer_headroom()
     cairo_bridge_ok = _safe_find_spec("gi._gi_cairo")
     py_cairo_ok = _safe_find_spec("cairo")
+    distro_hints = detect_linux_distro_v4l2_hints()
 
     return {
         "ok": bool(xdg_ok and reachability.get("all_listeners_reachable", True)),
@@ -358,12 +359,12 @@ async def run_linux_setup_check(runtime: Any, root_dir: str | Path | None = None
             "ok": bool(cairo_bridge_ok and py_cairo_ok),
             "gi_cairo": cairo_bridge_ok,
             "pycairo": py_cairo_ok,
-            "install_hint": "sudo apt install -y python3-gi-cairo",
+            "install_hint": distro_hints.get("gi_cairo_install", "sudo apt install -y python3-gi-cairo"),
         },
         "udp_socket_buffers": udp_buf,
         "usb_network": usb_state,
         "v4l2_webcam": v4l2_diag,
-        "v4l2_distro_hints": detect_linux_distro_v4l2_hints(),
+        "v4l2_distro_hints": distro_hints,
         "nfs_shares": shares,
         "reachability": reachability,
     }

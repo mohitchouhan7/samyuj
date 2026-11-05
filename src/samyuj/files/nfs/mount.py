@@ -79,9 +79,12 @@ class PhoneLinuxMountManager:
                 ok = True
 
         with contextlib.suppress(OSError):
-            cfg_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-            baloo_rc = cfg_home / "baloofilerc"
-            if not baloo_rc.is_file():
+            cfg_candidates = [Path.home() / ".config"]
+            env_cfg = os.environ.get("XDG_CONFIG_HOME")
+            if env_cfg:
+                cfg_candidates.insert(0, Path(env_cfg))
+            baloo_rc = next((c / "baloofilerc" for c in cfg_candidates if (c / "baloofilerc").is_file()), None)
+            if baloo_rc is None:
                 return ok
             base_abs = os.path.abspath(os.path.expanduser(str(self.base_dir))).rstrip("/") + "/"
             home_abs = os.path.abspath(os.path.expanduser(str(Path.home()))).rstrip("/")

@@ -266,9 +266,10 @@ class PhoneFuseBridgeNoFuseTest(unittest.TestCase):
 class MountPathsAndBookmarksTest(unittest.TestCase):
 
     def _with_env(self, td: str, xdg: str | None):
-        import tempfile
-        old = {k: os.environ.get(k) for k in ("HOME", "XDG_DATA_HOME")}
+        old = {k: os.environ.get(k) for k in ("HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")}
         os.environ["HOME"] = td
+        os.environ.pop("XDG_CONFIG_HOME", None)
+        os.environ.pop("XDG_CACHE_HOME", None)
         if xdg is None:
             os.environ.pop("XDG_DATA_HOME", None)
         else:

@@ -2,9 +2,10 @@ pkgname=samyuj
 pkgver=1.0.0
 pkgrel=1
 pkgdesc="Native GTK 4 / GTK 3 Desktop Companion for Smart Connect Android Devices"
-arch=('any')
+arch=('x86_64' 'aarch64' 'any')
 license=('Apache-2.0')
 depends=('python' 'python-gobject' 'python-cairo' 'gtk3' 'python-cryptography' 'python-pillow')
+makedepends=('cmake' 'gcc')
 optdepends=(
   'python-aiortc: WebRTC video streaming'
   'python-av: H.264/VP8 video decoding'
@@ -23,6 +24,11 @@ package() {
   install -d "$pkgdir/usr/share/icons/hicolor/scalable/apps"
   cp -r "$repo_root/src/samyuj" "$pkgdir/usr/lib/samyuj/src/"
   find "$pkgdir/usr/lib/samyuj/src" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+  if command -v cmake >/dev/null 2>&1 && command -v c++ >/dev/null 2>&1; then
+    cmake -S "$repo_root" -B "$srcdir/build" -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 && \
+    cmake --build "$srcdir/build" >/dev/null 2>&1 && \
+    install -Dm644 "$srcdir/build/libsc_fast.so" "$pkgdir/usr/lib/samyuj/libsc_fast.so" || true
+  fi
   install -Dm755 "$repo_root/samyuj" "$pkgdir/usr/bin/samyuj"
   install -Dm755 "$repo_root/samyuj-stop" "$pkgdir/usr/bin/samyuj-stop"
   install -Dm644 "$repo_root/packaging/linux/samyuj.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/samyuj.svg"

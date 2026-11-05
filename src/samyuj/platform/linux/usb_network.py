@@ -34,16 +34,36 @@ def _try_dhcp_client(iface: str) -> tuple[bool, str, str, str]:
                 time.sleep(0.35)
         except Exception:
             pass
-    dhclient_bin = shutil.which("dhclient")
-    if dhclient_bin:
+    networkctl_bin = shutil.which("networkctl")
+    if networkctl_bin:
         try:
             subprocess.run(
-                [dhclient_bin, "-1", "-lf", f"/tmp/sc-dhclient-{iface}.leases", iface],
+                [networkctl_bin, "reconfigure", iface],
+                capture_output=True, text=True, timeout=4.0,
+            )
+            for _ in range(3):
+                got = _iface_first_ipv4(iface)
+                if got and not got.startswith("169.254."):
+                    return True, "dhcp_networkctl", got, ""
+                time.sleep(0.35)
+        except Exception:
+            pass
+    for dhcp_name, dhcp_cmd in (
+        ("dhcp_dhclient", ["dhclient", "-1", "-lf", f"/tmp/sc-dhclient-{iface}.leases", iface]),
+        ("dhcp_dhcpcd", ["dhcpcd", "-1", "-q", iface]),
+        ("dhcp_udhcpc", ["udhcpc", "-i", iface, "-n", "-q"]),
+    ):
+        bin_path = shutil.which(dhcp_cmd[0])
+        if not bin_path:
+            continue
+        try:
+            subprocess.run(
+                [bin_path, *dhcp_cmd[1:]],
                 capture_output=True, text=True, timeout=5.0,
             )
             got = _iface_first_ipv4(iface)
             if got and not got.startswith("169.254."):
-                return True, "dhcp_dhclient", got, ""
+                return True, dhcp_name, got, ""
         except Exception:
             pass
     return False, "dhcp", "", ""
