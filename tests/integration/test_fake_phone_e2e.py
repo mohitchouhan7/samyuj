@@ -137,7 +137,12 @@ class FakePhoneIntegrationTest(unittest.IsolatedAsyncioTestCase):
                         "data": {"appName": "Calendar", "title": "Meeting", "text": "Now"},
                     },
                 )
-                await asyncio.sleep(0.1)
+                for _ in range(40):
+                    if rt.clip_last_text == "e2e-clip" and any(
+                        n.get("key") == "e2e-n1" for n in rt.notifications_list
+                    ):
+                        break
+                    await asyncio.sleep(0.05)
                 self.assertEqual(rt.clip_last_text, "e2e-clip")
                 self.assertTrue(any(n.get("key") == "e2e-n1" for n in rt.notifications_list))
             finally:

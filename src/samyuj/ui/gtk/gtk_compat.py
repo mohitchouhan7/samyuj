@@ -1,41 +1,106 @@
 from __future__ import annotations
 
+import atexit
 import contextlib
 import os
+from pathlib import Path
+import subprocess
+import sys
+import time
 from typing import Any
 
-import gi
+_SHARED_HEADLESS_PROC: subprocess.Popen[bytes] | None = None
+
+
+def ensure_headless_display(force_restart: bool = False) -> bool:
+    global _SHARED_HEADLESS_PROC
+    if not force_restart and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return True
+    candidates: list[tuple[str, str, list[str]]] = [
+        (
+            "/usr/bin/Xvfb",
+            ":99",
+            ["/usr/bin/Xvfb", ":99", "-screen", "0", "1440x900x24", "-nolisten", "tcp"],
+        ),
+        (
+            "/usr/bin/Xvnc",
+            ":98",
+            ["/usr/bin/Xvnc", ":98", "-rfbport", "-1", "-localhost", "-nolisten", "tcp", "-geometry", "1440x900"],
+        ),
+    ]
+    for bin_path, disp_num, cmd in candidates:
+        if not Path(bin_path).is_file():
+            continue
+        with contextlib.suppress(Exception):
+            if _SHARED_HEADLESS_PROC is None or _SHARED_HEADLESS_PROC.poll() is not None:
+                _SHARED_HEADLESS_PROC = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                atexit.register(
+                    lambda p=_SHARED_HEADLESS_PROC: p.terminate() if p.poll() is None else None
+                )
+                time.sleep(0.35)
+            os.environ["DISPLAY"] = disp_num
+            return True
+    return False
+
+
 
 GTK_MAJOR: int = 3
 IS_GTK4: bool = False
+_HAS_REAL_GI: bool = False
 
-_use_gtk4 = os.environ.get("SAMYUJ_USE_GTK4", "").strip().lower() in ("1", "true", "yes")
-_force_gtk3 = os.environ.get("SAMYUJ_FORCE_GTK3", "").strip().lower() in ("1", "true", "yes")
-if _use_gtk4 and not _force_gtk3:
-    try:
-        gi.require_version("Gtk", "4.0")
-        gi.require_version("Gdk", "4.0")
-        GTK_MAJOR = 4
-        IS_GTK4 = True
-    except Exception:
-        gi.require_version("Gtk", "3.0")
-        gi.require_version("Gdk", "3.0")
-        GTK_MAJOR = 3
-        IS_GTK4 = False
-else:
-    try:
-        gi.require_version("Gtk", "3.0")
-        gi.require_version("Gdk", "3.0")
-        GTK_MAJOR = 3
-        IS_GTK4 = False
-    except Exception:
-        gi.require_version("Gtk", "4.0")
-        gi.require_version("Gdk", "4.0")
-        GTK_MAJOR = 4
-        IS_GTK4 = True
+try:
+    import gi as _gi_mod
+    _HAS_REAL_GI = True
+except ModuleNotFoundError:
+    for _sys_dist in ("/usr/lib/python3/dist-packages", f"/usr/lib64/python3.{sys.version_info.minor}/site-packages"):
+        if Path(_sys_dist, "gi").is_dir() and _sys_dist not in sys.path:
+            sys.path.append(_sys_dist)
+            try:
+                import gi as _gi_mod
+                _HAS_REAL_GI = True
+                break
+            except Exception:
+                sys.path.remove(_sys_dist)
 
-gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
+if _HAS_REAL_GI:
+    try:
+        _use_gtk4 = os.environ.get("SAMYUJ_USE_GTK4", "").strip().lower() in ("1", "true", "yes")
+        _force_gtk3 = os.environ.get("SAMYUJ_FORCE_GTK3", "").strip().lower() in ("1", "true", "yes")
+        if _use_gtk4 and not _force_gtk3:
+            try:
+                _gi_mod.require_version("Gtk", "4.0")
+                _gi_mod.require_version("Gdk", "4.0")
+                GTK_MAJOR = 4
+                IS_GTK4 = True
+            except Exception:
+                _gi_mod.require_version("Gtk", "3.0")
+                _gi_mod.require_version("Gdk", "3.0")
+                GTK_MAJOR = 3
+                IS_GTK4 = False
+        else:
+            try:
+                _gi_mod.require_version("Gtk", "3.0")
+                _gi_mod.require_version("Gdk", "3.0")
+                GTK_MAJOR = 3
+                IS_GTK4 = False
+            except Exception:
+                _gi_mod.require_version("Gtk", "4.0")
+                _gi_mod.require_version("Gdk", "4.0")
+                GTK_MAJOR = 4
+                IS_GTK4 = True
+
+        _gi_mod.require_version("GdkPixbuf", "2.0")
+        from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
+    except Exception:
+        _HAS_REAL_GI = False
+
+if not _HAS_REAL_GI:
+    from .gtk_headless_stub import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
+
 
 def get_gtk_version_string() -> str:
     with contextlib.suppress(Exception):
@@ -115,7 +180,7 @@ def _install_gtk4_shims() -> None:
             ch = self.get_first_child()
             while ch is not None:
                 children.append(ch)
-                ch = ch.get_next_sibling()
+                ch = self.get_next_sibling()
             return children
         Gtk.Widget.get_children = _widget_get_children
 
@@ -249,6 +314,7 @@ __all__ = [
     "IS_GTK4",
     "Pango",
     "apply_css_provider_to_display",
+    "ensure_headless_display",
     "get_gtk_version_string",
     "load_css_bytes",
     "set_widget_cursor_name",

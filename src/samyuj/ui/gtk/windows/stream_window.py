@@ -284,7 +284,10 @@ class FeatureStreamGtkWindow(Gtk.Window):
             | Gdk.EventMask.SMOOTH_SCROLL_MASK
         )
         import importlib.util as _ilu
-        self._have_gi_cairo = _ilu.find_spec("gi._gi_cairo") is not None
+        try:
+            self._have_gi_cairo = _ilu.find_spec("gi._gi_cairo") is not None
+        except Exception:
+            self._have_gi_cairo = False
         self._fallback_layout: Gtk.Layout | None = None
         self._fallback_img: Gtk.Image | None = None
         if self._have_gi_cairo:

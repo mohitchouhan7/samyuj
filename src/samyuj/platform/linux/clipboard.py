@@ -152,17 +152,17 @@ class ClipboardSyncManager:
         try:
             if cli == "wl":
                 p = subprocess.run(["wl-copy", "--", text],
-                                   capture_output=True, timeout=2.0)
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0)
                 return p.returncode == 0
             if cli == "x11-xclip":
                 p = subprocess.run(["xclip", "-selection", "clipboard", "-in"],
                                    input=text.encode("utf-8"),
-                                   capture_output=True, timeout=2.0)
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0)
                 return p.returncode == 0
             if cli == "x11-xsel":
                 p = subprocess.run(["xsel", "--clipboard", "--input"],
                                    input=text.encode("utf-8"),
-                                   capture_output=True, timeout=2.0)
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0)
                 return p.returncode == 0
         except Exception:
             return False
@@ -189,12 +189,12 @@ class ClipboardSyncManager:
             if bool(os.environ.get("DISPLAY")) and shutil.which("xclip"):
                 p = subprocess.run(["xclip", "-selection", "primary", "-in"],
                                    input=text.encode("utf-8"),
-                                   capture_output=True, timeout=2.0)
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0)
                 return p.returncode == 0
             if bool(os.environ.get("DISPLAY")) and shutil.which("xsel"):
                 p = subprocess.run(["xsel", "--primary", "--input"],
                                    input=text.encode("utf-8"),
-                                   capture_output=True, timeout=2.0)
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0)
                 return p.returncode == 0
         except Exception:
             pass

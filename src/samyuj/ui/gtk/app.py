@@ -17,6 +17,7 @@ from .gtk_compat import (
     Gtk,
     IS_GTK4,
     apply_css_provider_to_display,
+    ensure_headless_display,
     get_gtk_version_string,
     load_css_bytes,
 )
@@ -123,21 +124,8 @@ class SamyujGtkDesktopApp(
         self.gtk_version_string: str = get_gtk_version_string()
         self._xvnc_proc: subprocess.Popen | None = None
         ok_init, _ = Gtk.init_check([])
-        if not ok_init and Path("/usr/bin/Xvnc").is_file():
-            with contextlib.suppress(Exception):
-                import atexit
-                global _SHARED_XVNC_PROC
-                if globals().get("_SHARED_XVNC_PROC") is None or _SHARED_XVNC_PROC.poll() is not None:
-                    _SHARED_XVNC_PROC = subprocess.Popen(
-                        ["/usr/bin/Xvnc", ":98", "-rfbport", "-1", "-localhost", "-nolisten", "tcp", "-geometry", "1440x900"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    atexit.register(lambda p=_SHARED_XVNC_PROC: p.terminate() if p.poll() is None else None)
-                    time.sleep(0.35)
-                self._xvnc_proc = _SHARED_XVNC_PROC
-                os.environ["DISPLAY"] = ":98"
-                ok_init, _ = Gtk.init_check([])
+        if not ok_init and ensure_headless_display(force_restart=True):
+            ok_init, _ = Gtk.init_check([])
         if ok_init:
             with contextlib.suppress(Exception):
                 import gi.overrides.Gtk as _gtk_ov

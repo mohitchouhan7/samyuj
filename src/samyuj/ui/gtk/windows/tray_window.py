@@ -5,7 +5,6 @@ import os
 import subprocess
 from pathlib import Path
 
-import gi
 from samyuj.ui.gtk.gtk_compat import Gdk, Gio, GLib, Gtk, Pango
 
 from samyuj.ui.gtk.assets import (
@@ -1720,6 +1719,7 @@ class SystemTrayController:
 
         for ns in ("AyatanaAppIndicator3", "AppIndicator3"):
             with contextlib.suppress(Exception):
+                import gi
                 gi.require_version(ns, "0.1")
                 mod = __import__(f"gi.repository.{ns}", fromlist=[ns])
                 ind = mod.Indicator.new(
