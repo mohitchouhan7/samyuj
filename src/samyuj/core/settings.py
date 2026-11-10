@@ -11,6 +11,8 @@ from .paths import get_xdg_paths
 
 SETTINGS_DEFAULTS: dict[str, Any] = {
     "incoming_files_dir": str(Path.home() / "Downloads" / "Samyuj"),
+    "ui_theme": "aurora",
+    "color_palette": "mocha",
     "connect_usb": True,
     "connect_wifi": True,
     "start_background": False,
@@ -45,6 +47,8 @@ class UserSettings:
     incoming_files_dir: str = field(
         default_factory=lambda: str(Path.home() / "Downloads" / "Samyuj")
     )
+    ui_theme: str = "aurora"
+    color_palette: str = "mocha"
     connect_usb: bool = True
     connect_wifi: bool = True
     start_background: bool = False

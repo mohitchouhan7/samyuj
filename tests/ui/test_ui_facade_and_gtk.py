@@ -60,6 +60,23 @@ class UiFacadeAndModelsTest(unittest.TestCase):
                 self.assertIn(GTK_MAJOR, (3, 4))
                 self.assertEqual(app.gtk_major_version, GTK_MAJOR)
                 self.assertTrue(bool(get_gtk_version_string()))
+                self.assertEqual(app.ui_theme, "aurora")
+                self.assertEqual(app.color_palette, "mocha")
+
+                from pathlib import Path as _P
+                share_test_dir = _P(td) / "share_batch"
+                share_test_dir.mkdir(parents=True, exist_ok=True)
+                sf1 = share_test_dir / "one.txt"
+                sf2 = share_test_dir / "two.txt"
+                sf1.write_bytes(b"first shared file")
+                sf2.write_bytes(b"second shared file")
+                shares_before = list(facade.nfs_list_shares().get("shares", []))
+                res_sh = app.handle_shared_paths([sf1, sf2])
+                self.assertTrue(res_sh.get("ok"))
+                self.assertEqual(len(res_sh.get("files", [])), 2)
+                self.assertEqual(facade.nfs_list_shares().get("shares", []), shares_before)
+                self.assertFalse((_P(facade.export_dir) / "one.txt").exists())
+                self.assertFalse((_P(facade.export_dir) / "two.txt").exists())
 
                 app._refresh_all()
                 app._pump_video()

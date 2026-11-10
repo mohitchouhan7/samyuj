@@ -565,7 +565,7 @@ class SettingsPageMixin:
         self.settings_theme_combo = Gtk.ComboBoxText()
         for tid, tname, tdesc in UI_THEMES:
             self.settings_theme_combo.append(tid, f"{tname} ({tdesc})")
-        self.settings_theme_combo.set_active_id(getattr(self, "ui_theme", "tray"))
+        self.settings_theme_combo.set_active_id(getattr(self, "ui_theme", "aurora"))
         self.settings_theme_combo.set_valign(Gtk.Align.CENTER)
         self.settings_theme_combo.connect("changed", self._on_settings_theme_combo_changed)
         theme_row.pack_end(self.settings_theme_combo, False, False, 0)
@@ -590,7 +590,7 @@ class SettingsPageMixin:
         self.settings_palette_combo = Gtk.ComboBoxText()
         for pid, pinfo in COLOR_PALETTES.items():
             self.settings_palette_combo.append(pid, str(pinfo.get("name") or pid))
-        self.settings_palette_combo.set_active_id(getattr(self, "color_palette", "carbon"))
+        self.settings_palette_combo.set_active_id(getattr(self, "color_palette", "mocha"))
         self.settings_palette_combo.set_valign(Gtk.Align.CENTER)
         self.settings_palette_combo.connect("changed", self._on_settings_palette_combo_changed)
         pal_row.pack_end(self.settings_palette_combo, False, False, 0)
@@ -718,12 +718,12 @@ class SettingsPageMixin:
     def _on_settings_theme_combo_changed(self, combo: Gtk.ComboBoxText) -> None:
         if getattr(self, "_updating_theme_switches", False):
             return
-        self.set_ui_theme(combo.get_active_id() or "tray", persist=True)
+        self.set_ui_theme(combo.get_active_id() or "aurora", persist=True)
 
     def _on_settings_palette_combo_changed(self, combo: Gtk.ComboBoxText) -> None:
         if getattr(self, "_updating_theme_switches", False):
             return
-        self.set_color_palette(combo.get_active_id() or "carbon", persist=True)
+        self.set_color_palette(combo.get_active_id() or "mocha", persist=True)
 
     def _on_toggle_dark_mode_setting(self, active: bool) -> None:
         if getattr(self, "_updating_theme_switches", False):

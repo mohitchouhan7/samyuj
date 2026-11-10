@@ -16,11 +16,12 @@ from pathlib import Path
 
 from samyuj.protocol.envelope import _env
 from samyuj.transport.connection import _set_tcp_nodelay
-from samyuj.transport.websocket import ws_accept_value, ws_frame
+from samyuj.transport.websocket import WsFrameParser, ws_accept_value, ws_frame
 
 HAVE_MCL = False
 
 from samyuj.core.identity import (
+    load_or_create_identity as _load_or_create_identity,
     make_server_ssl_context as _simple_server_ctx,
     make_server_ssl_context as server_ssl_context,
 )
@@ -320,6 +321,9 @@ class FileSharingServiceMixin:
     async def _ensure_xfer_server(self) -> int:
         if self._xfer_srv is not None:
             return self.xfer_port
+        if getattr(self, "identity", None) is None:
+            self.identity = _load_or_create_identity(str(self.state_dir))
+            self.fp_b64 = self.identity.fp_b64
         ctx = _simple_server_ctx(self.identity) if not HAVE_MCL else server_ssl_context(self.identity)
         self._xfer_srv = await asyncio.start_server(self._on_xfer_conn, self.host, 0, ssl=ctx)
         self.xfer_port = self._xfer_srv.sockets[0].getsockname()[1]
@@ -340,13 +344,26 @@ class FileSharingServiceMixin:
             return {"ok": True, "taskId": task.task_id, "detail": f"Created {safe_name} ({len(content)}B) & announced svc-2 transfer taskId={task.task_id}"}
         return {"ok": False, "error": "failed to start svc-2 transfer"}
 
-    async def send_files_svc2(self, conn: dict | None, paths: list[str], mode: str = "auto") -> TransferTask | None:
-        c = conn or self._live_ws()
+    async def send_files_svc2(
+        self,
+        conn: dict | list[str] | str | Path | None = None,
+        paths: list[str] | None = None,
+        mode: str = "auto",
+    ) -> TransferTask | None:
+        if paths is None and isinstance(conn, (list, tuple, set, str, Path)):
+            raw_paths = [str(conn)] if isinstance(conn, (str, Path)) else [str(x) for x in conn]
+            c = self._live_ws()
+        else:
+            c = conn if isinstance(conn, dict) else self._live_ws()
+            if isinstance(paths, (str, Path)):
+                raw_paths = [str(paths)]
+            else:
+                raw_paths = [str(x) for x in (paths or [])]
         if c is None:
             return None
         await self._ensure_xfer_server()
         resolved: list[Path] = []
-        for p_str in paths or ["@demo"]:
+        for p_str in raw_paths or ["@demo"]:
             if p_str in ("@demo", "@sample"):
                 outbox = self.out_dir / "outbox"
                 outbox.mkdir(parents=True, exist_ok=True)
@@ -354,18 +371,38 @@ class FileSharingServiceMixin:
                 demo.write_text(f"Samyuj PC File Transfer Demo ({datetime.datetime.now().isoformat()})\n", encoding="utf-8")
                 resolved.append(demo)
             else:
-                pp = Path(os.path.expanduser(p_str))
+                pp = Path(os.path.expanduser(str(p_str)))
                 if pp.is_file():
                     resolved.append(pp)
                 elif pp.is_dir():
-                    resolved.extend(sorted(q for q in pp.rglob("*") if q.is_file())[:50])
+                    resolved.extend(sorted(q for q in pp.rglob("*") if q.is_file())[:200])
+        deduped: list[Path] = []
+        seen_real: set[str] = set()
+        for cand in resolved:
+            key = str(cand.resolve())
+            if key not in seen_real:
+                seen_real.add(key)
+                deduped.append(cand)
+        resolved = deduped
         if not resolved:
             return None
-        actual_mode = ("zip" if len(resolved) == 1 else "files") if mode == "auto" else mode
+        actual_mode = "files" if mode == "files" else "zip"
         task = TransferTask(resolved, self.xfer_port, self.out_dir / "zips", mode=actual_mode)
-        task.base_url = f"https://{self.lan_ip}:{self.xfer_port}"
+        local_ip = (
+            self._conn_local_ip(c)
+            if hasattr(self, "_conn_local_ip")
+            else resolve_session_ip(self, c)
+        )
+        if not local_ip or local_ip in ("0.0.0.0", "::", "127.0.0.1"):
+            lan_cand = getattr(self, "lan_ip", "") or ""
+            if lan_cand and lan_cand not in ("0.0.0.0", "::"):
+                local_ip = lan_cand
+        if not local_ip or local_ip in ("0.0.0.0", "::"):
+            local_ip = "127.0.0.1"
+        task.base_url = f"https://{local_ip}:{self.xfer_port}"
         if actual_mode == "zip":
             await asyncio.to_thread(task.ensure_zip)
+        task.done_evt = asyncio.Event()
         self.xfer_tasks[task.task_id] = task
         while len(self.xfer_tasks) > 128:
             oldest_tid = next(iter(self.xfer_tasks))
@@ -401,13 +438,17 @@ class FileSharingServiceMixin:
                     ws_key = line.split(":", 1)[1].strip()
             if ws_key and parsed.path == "/websocket":
                 want_tid = (qs.get("taskId") or [""])[0]
+                want_tok = (qs.get("token") or [""])[0]
                 task = self.xfer_tasks.get(want_tid) if want_tid else None
+                if task is None and want_tok:
+                    task = next((t for t in self.xfer_tasks.values() if t.token == want_tok), None)
                 if task is None:
                     task = self.active_xfer_task
-                if task is None:
+                if task is None or task.phase not in ("announced", "ws_open", "nego_ok", "requested", "accepted", "downloading"):
                     writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                     await writer.drain()
                     return
+                task.phase = "ws_open"
                 accept = ws_accept_value(ws_key)
                 writer.write((f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
                               f"Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").encode())
@@ -415,29 +456,91 @@ class FileSharingServiceMixin:
                 vn = f'action:Server{task.next_server_seq()}:versionNegotiation?{{"version":1}}'
                 writer.write(ws_frame(0x1, vn.encode("utf-8")))
                 await writer.drain()
-                wbuf = bytearray(rest)
-                deadline = time.monotonic() + 30.0
-                while time.monotonic() < deadline:
-                    line = await self._read_ws_text(reader, timeout=8.0, buf=wbuf)
-                    if line is None:
-                        break
-                    if not line:
-                        continue
-                    kind, mid, name, payload = _parse_ft_line(line)
-                    if kind == "ack" and name.lower() == "versionnegotiation":
-                        sr = task.send_request_json(self.device_id_b64, self.device_name)
-                        msg = f"action:Server{task.next_server_seq()}:sendRequest?" + json.dumps(sr, separators=(",", ":"), ensure_ascii=False)
-                        writer.write(ws_frame(0x1, msg.encode("utf-8")))
-                        await writer.drain()
-                    elif kind == "action" and name.lower() == "status":
-                        p = payload or {}
-                        if p.get("type") == 1:
-                            writer.write(ws_frame(0x1, f"ack:{mid}:status".encode("utf-8")))
-                            await writer.drain()
-                            task.phase = "success" if str(p.get("reason")) == "success" else "failed"
-                            self.xfer_last_status = f"Push {task.task_id}: {p.get('reason')}"
-                            self.events.log("FILEEX_PUSH_DONE", self.xfer_last_status, feature="file_transfer")
+                parser = WsFrameParser()
+                if rest:
+                    parser.buf.extend(rest)
+                deadline = time.monotonic() + 300.0
+                closed_ws = False
+                while time.monotonic() < deadline and not closed_ws:
+                    frames = parser.feed(b"")
+                    if not frames:
+                        try:
+                            chunk_ws = await asyncio.wait_for(reader.read(65536), timeout=30.0)
+                        except (asyncio.TimeoutError, TimeoutError):
+                            if reader.at_eof() or task.phase in ("success", "failed"):
+                                break
+                            continue
+                        if not chunk_ws:
                             break
+                        frames = parser.feed(chunk_ws)
+                    for opcode, _fin, raw_pl in frames:
+                        if opcode == 0x9:
+                            writer.write(ws_frame(0xA, raw_pl))
+                            await writer.drain()
+                            continue
+                        if opcode == 0x8:
+                            with contextlib.suppress(Exception):
+                                writer.write(ws_frame(0x8, raw_pl))
+                                await writer.drain()
+                            closed_ws = True
+                            break
+                        if opcode != 0x1:
+                            continue
+                        text_pl = raw_pl.decode("utf-8", "replace")
+                        for subline in text_pl.split("\n"):
+                            subline = subline.strip()
+                            if not subline:
+                                continue
+                            kind, mid, name, payload = _parse_ft_line(subline)
+                            if not kind:
+                                continue
+                            lname = name.lower()
+                            if kind == "ack" and lname == "versionnegotiation":
+                                p_vn = payload or {}
+                                ack_tok = str(p_vn.get("token") or "")
+                                if ack_tok:
+                                    matched_t = next((t for t in self.xfer_tasks.values() if t.token == ack_tok), None)
+                                    if matched_t is not None:
+                                        task = matched_t
+                                task.phase = "nego_ok"
+                                sr = task.send_request_json(self.device_id_b64, self.device_name, getattr(task, "base_url", ""))
+                                msg = f"action:Server{task.next_server_seq()}:sendRequest?" + json.dumps(sr, separators=(",", ":"), ensure_ascii=False)
+                                writer.write(ws_frame(0x1, msg.encode("utf-8")))
+                                await writer.drain()
+                                task.phase = "requested"
+                            elif kind == "ack" and lname == "sendrequest":
+                                task.phase = "accepted"
+                            elif kind == "action" and lname == "status":
+                                p = payload or {}
+                                st_type = p.get("type")
+                                reason = p.get("reason")
+                                if st_type == 0:
+                                    deadline = max(deadline, time.monotonic() + 120.0)
+                                    continue
+                                if str(reason) == "success":
+                                    task.phase = "success"
+                                    self.xfer_last_status = f"Push {task.task_id}: success ({task.file_count} file(s), {task.bytes_served}/{task.size}B)"
+                                    self.events.log("FILEEX_PUSH_DONE", self.xfer_last_status, feature="file_transfer")
+                                else:
+                                    task.phase = "failed"
+                                    task.error = f"phone reported failure: {reason!r}"
+                                    self.xfer_last_status = f"Push {task.task_id}: {reason}"
+                                    self.events.log("FILEEX_PUSH_DONE", self.xfer_last_status, feature="file_transfer")
+                                writer.write(ws_frame(0x1, f"ack:{mid}:status".encode("utf-8")))
+                                await writer.drain()
+                                if getattr(task, "done_evt", None) is not None:
+                                    task.done_evt.set()
+                                closed_ws = True
+                                break
+                            elif kind == "action" and lname == "message":
+                                items = (payload or {}).get("data") or []
+                                for it in items:
+                                    if isinstance(it, dict):
+                                        task.saved_paths[int(it.get("index", 0))] = str(it.get("filePath") or "")
+                                if items and isinstance(items[-1], dict):
+                                    task.saved_path = str(items[-1].get("filePath") or "")
+                                deadline = max(deadline, time.monotonic() + 120.0)
+                                continue
                 return
             if parsed.path.startswith("/download") and method in ("GET", "HEAD"):
                 tid = (qs.get("taskId") or [""])[0]
@@ -447,12 +550,17 @@ class FileSharingServiceMixin:
                     idx_n = int((qs.get("index") or ["0"])[0])
                 except ValueError:
                     idx_n = -1
-                task = self.xfer_tasks.get(tid) if tid else self.active_xfer_task
+                task = self.xfer_tasks.get(tid) if tid else None
+                if task is None and tok:
+                    task = next((t for t in self.xfer_tasks.values() if t.token == tok), None)
+                if task is None:
+                    task = self.active_xfer_task
                 tok_ok = (not task.token) or hmac.compare_digest(str(tok).encode("utf-8"), str(task.token).encode("utf-8")) if task is not None else False
                 if task is None or not tok_ok or not (0 <= idx_n < task.file_count):
                     writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                     await writer.drain()
                     return
+                task.phase = "downloading"
                 if task.mode == "files" and has_idx:
                     src = task.paths[idx_n]
                 else:
@@ -470,6 +578,14 @@ class FileSharingServiceMixin:
                             writer.write(chunk_b)
                             await writer.drain()
                             task.bytes_served += len(chunk_b)
+                    task.served_idx.add(idx_n if has_idx else 0)
+                return
+            if parsed.path.startswith("/thumbnail"):
+                writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                await writer.drain()
+                return
+            writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            await writer.drain()
         except Exception as exc:
             self.events.log("FILEEX_SERVER_ERR", repr(exc), feature="file_transfer")
         finally:
@@ -485,7 +601,21 @@ class FileSharingServiceMixin:
             conn["tasks"].append(asyncio.create_task(self._pull_phone_files_svc2(conn, d)))
             return
         if cmd == 3:
-            self.events.log("FILEEX_ERR_FROM_PHONE", f"{tag} errorcode={d.get('errorcode')}", feature="file_transfer")
+            ec = d.get("errorcode")
+            why = {
+                312: "not paired / file transfer disabled",
+                313: "ADVERTISE_WHILE_UNLOCKED policy blocks transfer",
+                323: "ThinkShield enterprise policy blocks transfer",
+            }.get(ec, "unknown reject")
+            t = self.active_xfer_task
+            if t is not None:
+                t.phase = "failed"
+                t.error = f"phone rejected with code {ec}: {why}"
+                t.phone_rejected = ec
+                self.xfer_last_status = f"Push {t.task_id} rejected ({ec}): {why}"
+                if getattr(t, "done_evt", None) is not None:
+                    t.done_evt.set()
+            self.events.log("FILEEX_ERR_FROM_PHONE", f"{tag} errorcode={ec} ({why})", feature="file_transfer")
             return
         if cmd == 4:
             txt = str(d.get("text") or "")
@@ -985,7 +1115,11 @@ class FileTransferService(SamyujService):
         if action == "send_demo":
             return await self.h.request("filesend:@demo", c)
         if action == "send_files":
-            p = str(params.get("path") or "@demo")
+            raw_paths = params.get("paths")
+            if isinstance(raw_paths, (list, tuple, set)) and raw_paths:
+                p = "##".join(str(x) for x in raw_paths if x)
+            else:
+                p = str(params.get("path") or "@demo")
             return await self.h.request(f"filesend:{p}", c)
         if action == "create_and_send":
             nm = str(params.get("name") or "samyuj_note.txt")

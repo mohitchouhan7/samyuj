@@ -16,7 +16,7 @@ def gen_task_id() -> str:
 def guess_mime(name: str) -> str:
     return (
         mimetypes.guess_type(name)[0]
-        or ("image/png" if name.lower().endswith(".png") else "application/octet-stream")
+        or ("image/png" if name.lower().endswith(".png") else "")
     )
 
 def build_filestation_announce(

@@ -114,6 +114,14 @@ class ApplicationFacade:
             return {"ok": False, "error": "service_bus unavailable"}
         return await bus.invoke(service_id, action, params or {})
 
+    async def send_files_svc2(
+        self,
+        conn: Any = None,
+        paths: list[str] | None = None,
+        mode: str = "auto",
+    ) -> Any:
+        return await self.runtime.send_files_svc2(conn, paths, mode=mode)
+
     async def request(self, command: str, conn: dict[str, Any] | None = None, arg: str = "") -> dict[str, Any]:
         return await self.runtime.request(command, conn=conn, arg=arg)
 

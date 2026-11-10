@@ -1384,7 +1384,8 @@ class RequestDispatcherMixin:
         return None
 
     async def _rq_cmd_filesend(self, name: str, base: str, extra: str, c: dict | None, rec: dict) -> dict | None:
-        task = await self.send_files_svc2(c, [extra] if extra else ["@demo"])
+        raw_list = [p.strip() for p in extra.replace("\r", "\n").replace("##", "\n").split("\n") if p.strip()] if extra else ["@demo"]
+        task = await self.send_files_svc2(c, raw_list)
         rec.update(ok=(task is not None),
                    detail=(f"svc-2 cmd:1 announced batch taskId={task.task_id} ({task.file_count} file(s), {task.size}B) on TLS port {task.server_port}"
                            if task else "failed to announce file batch"))

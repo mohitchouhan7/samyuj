@@ -132,12 +132,16 @@ class SamyujGtkDesktopApp(
                 _gtk_ov.initialized = True
 
         self._css_provider: Gtk.CssProvider | None = None
-        self.ui_theme: str = str(self.facade.user_settings.get("ui_theme") or "material").strip().lower()
+        self.ui_theme: str = str(self.facade.user_settings.get("ui_theme") or "aurora").strip().lower()
+        if self.ui_theme in ("aurora_glass", "aurora-glass"):
+            self.ui_theme = "aurora"
         if self.ui_theme not in ("material", "tray", "aurora", "gtk"):
-            self.ui_theme = "tray"
-        self.color_palette: str = str(self.facade.user_settings.get("color_palette") or "material_you").strip().lower()
+            self.ui_theme = "aurora"
+        self.color_palette: str = str(self.facade.user_settings.get("color_palette") or "mocha").strip().lower()
+        if self.color_palette in ("catppuccin", "catppuccin_mocha", "catppuccin-mocha"):
+            self.color_palette = "mocha"
         if self.color_palette not in COLOR_PALETTES:
-            self.color_palette = "carbon"
+            self.color_palette = "mocha"
         self.icon_style: str = str(self.facade.user_settings.get("icon_style") or "minimal").strip().lower()
         if self.icon_style not in ("minimal", "toned"):
             self.icon_style = "minimal"
@@ -559,8 +563,8 @@ class SamyujGtkDesktopApp(
 
     def _apply_css(self) -> None:
         set_active_dark_mode(bool(getattr(self, "dark_mode", True)))
-        set_active_ui_theme(str(getattr(self, "ui_theme", "tray")))
-        set_active_color_palette(str(getattr(self, "color_palette", "carbon")))
+        set_active_ui_theme(str(getattr(self, "ui_theme", "aurora")))
+        set_active_color_palette(str(getattr(self, "color_palette", "mocha")))
         set_active_icon_style(str(getattr(self, "icon_style", "minimal")))
         with contextlib.suppress(Exception):
             settings = Gtk.Settings.get_default()
@@ -635,9 +639,11 @@ class SamyujGtkDesktopApp(
                 self.win.queue_draw()
 
     def set_ui_theme(self, theme_id: str, persist: bool = True) -> None:
-        tid = str(theme_id or "tray").strip().lower()
+        tid = str(theme_id or "aurora").strip().lower()
+        if tid in ("aurora_glass", "aurora-glass"):
+            tid = "aurora"
         if tid not in ("material", "tray", "aurora", "gtk"):
-            tid = "tray"
+            tid = "aurora"
         self.ui_theme = tid
         if persist:
             with contextlib.suppress(Exception):
@@ -646,9 +652,11 @@ class SamyujGtkDesktopApp(
         self._refresh_themed_icons_and_previews()
 
     def set_color_palette(self, palette_id: str, persist: bool = True) -> None:
-        pid = str(palette_id or "carbon").strip().lower()
+        pid = str(palette_id or "mocha").strip().lower()
+        if pid in ("catppuccin", "catppuccin_mocha", "catppuccin-mocha"):
+            pid = "mocha"
         if pid not in COLOR_PALETTES:
-            pid = "carbon"
+            pid = "mocha"
         self.color_palette = pid
         if persist:
             with contextlib.suppress(Exception):

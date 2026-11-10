@@ -504,6 +504,8 @@ class SamyujRuntime(
         self.phone_storage: dict[str, Any] = {"free_bytes": 0, "total_bytes": 0}
         self.user_settings: dict[str, Any] = {
             "incoming_files_dir": str(Path.home() / "Downloads" / "Samyuj"),
+            "ui_theme": "aurora",
+            "color_palette": "mocha",
             "connect_usb": True,
             "connect_wifi": True,
             "start_background": False,

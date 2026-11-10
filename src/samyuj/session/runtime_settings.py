@@ -81,6 +81,14 @@ class RuntimeSettingsMixin:
                         loaded["ss_share_type_r27_migrated"] = True
                         with contextlib.suppress(OSError):
                             sf.write_text(json.dumps(loaded, indent=2), encoding="utf-8")
+                    if not loaded.get("theme_aurora_mocha_migrated"):
+                        if loaded.get("ui_theme") in (None, "", "material", "tray"):
+                            loaded["ui_theme"] = "aurora"
+                        if loaded.get("color_palette") in (None, "", "material_you", "carbon"):
+                            loaded["color_palette"] = "mocha"
+                        loaded["theme_aurora_mocha_migrated"] = True
+                        with contextlib.suppress(OSError):
+                            sf.write_text(json.dumps(loaded, indent=2), encoding="utf-8")
                     self.user_settings.update(loaded)
         self.prefer_usb = bool(self.user_settings.get("connect_usb", True))
         self.uv_swap = bool(self.user_settings.get("uv_swap", True))
@@ -110,6 +118,8 @@ class RuntimeSettingsMixin:
                 self.uv_swap = bool(updates["uv_swap"])
             if "ss_share_type" in updates:
                 updates["ss_share_type_r27_migrated"] = True
+            if "ui_theme" in updates or "color_palette" in updates:
+                updates["theme_aurora_mocha_migrated"] = True
             self.user_settings.update(updates)
         self.prefer_usb = bool(self.user_settings.get("connect_usb", True))
         with contextlib.suppress(OSError):
@@ -199,4 +209,3 @@ class RuntimeSettingsMixin:
             if dnm and not dnm.startswith("_"):
                 return dnm
         return "Connected Phone" if c else "Phone"
-

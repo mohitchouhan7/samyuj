@@ -364,8 +364,8 @@ COLOR_PALETTES: dict[str, dict[str, dict[str, str] | str]] = {
 }
 
 _ACTIVE_DARK_MODE: bool = True
-_ACTIVE_UI_THEME: str = "material"
-_ACTIVE_COLOR_PALETTE: str = "material_you"
+_ACTIVE_UI_THEME: str = "aurora"
+_ACTIVE_COLOR_PALETTE: str = "mocha"
 _ACTIVE_ICON_STYLE: str = "minimal"
 
 def get_active_dark_mode() -> bool:
@@ -381,9 +381,11 @@ def get_active_ui_theme() -> str:
 
 def set_active_ui_theme(theme_id: str) -> str:
     global _ACTIVE_UI_THEME
-    tid = str(theme_id or "tray").strip().lower()
+    tid = str(theme_id or "aurora").strip().lower()
+    if tid in ("aurora_glass", "aurora-glass"):
+        tid = "aurora"
     if tid not in ("material", "tray", "aurora", "gtk"):
-        tid = "tray"
+        tid = "aurora"
     _ACTIVE_UI_THEME = tid
     return _ACTIVE_UI_THEME
 
@@ -392,9 +394,11 @@ def get_active_color_palette() -> str:
 
 def set_active_color_palette(palette_id: str) -> str:
     global _ACTIVE_COLOR_PALETTE
-    pid = str(palette_id or "carbon").strip().lower()
+    pid = str(palette_id or "mocha").strip().lower()
+    if pid in ("catppuccin", "catppuccin_mocha", "catppuccin-mocha"):
+        pid = "mocha"
     if pid not in COLOR_PALETTES:
-        pid = "carbon"
+        pid = "mocha"
     _ACTIVE_COLOR_PALETTE = pid
     return _ACTIVE_COLOR_PALETTE
 
@@ -409,8 +413,10 @@ def set_active_icon_style(style_id: str) -> str:
 
 def get_active_palette_tokens(palette_id: str | None = None, dark: bool | None = None) -> dict[str, str]:
     pid = str(palette_id or _ACTIVE_COLOR_PALETTE).strip().lower()
+    if pid in ("catppuccin", "catppuccin_mocha", "catppuccin-mocha"):
+        pid = "mocha"
     if pid not in COLOR_PALETTES:
-        pid = "carbon"
+        pid = "mocha"
     is_dark = _ACTIVE_DARK_MODE if dark is None else bool(dark)
     mode_key = "dark" if is_dark else "light"
     tokens = COLOR_PALETTES[pid][mode_key]
@@ -422,8 +428,10 @@ def build_themed_gtk_css(
     dark: bool | None = None,
 ) -> bytes:
     tid = str(ui_theme or _ACTIVE_UI_THEME).strip().lower()
+    if tid in ("aurora_glass", "aurora-glass"):
+        tid = "aurora"
     if tid not in ("material", "tray", "aurora", "gtk"):
-        tid = "tray"
+        tid = "aurora"
     t = get_active_palette_tokens(palette_id, dark)
     bg = t["bg"]
     surf = t["surf"]

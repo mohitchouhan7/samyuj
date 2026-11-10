@@ -14,11 +14,6 @@ from samyuj.protocol.services.files import gen_task_id, guess_mime as _guess_mim
 
 class TransferTask:
 
-    ZIP_STORE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
-                     ".mp4", ".mkv", ".mov", ".avi", ".mp3", ".m4a", ".aac",
-                     ".ogg", ".flac", ".zip", ".7z", ".rar", ".gz", ".xz",
-                     ".apk", ".pdf", ".docx", ".xlsx", ".pptx"}
-
     def __init__(self, paths: list[Path], server_port: int, zip_dir: Path,
                  mode: str = "zip") -> None:
         self.paths = list(paths)
@@ -44,13 +39,18 @@ class TransferTask:
         self.zip_path: Path | None = None
         self.zip_size: int | None = None
         self.size = self.logical_size
+        if self.mode == "zip":
+            self.ensure_zip()
         self.token = base64.urlsafe_b64encode(os.urandom(24)).decode()
         self.server_port = int(server_port)
         self.phase = "announced"
         self.bytes_served = 0
         self.served_idx: set[int] = set()
+        self.saved_path: str | None = None
         self.saved_paths: dict[int, str] = {}
         self.error: str | None = None
+        self.phone_rejected: int | None = None
+        self.done_evt = None
         self.server_seq = 1024
         self.base_url = ""
 
@@ -66,16 +66,15 @@ class TransferTask:
         zp = self.zip_dir / f"{self.task_id}.zip"
         with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
             for e, pp in zip(self.entries, self.paths):
-                kind = (zipfile.ZIP_STORED if pp.suffix.lower() in self.ZIP_STORE_EXT
-                        else zipfile.ZIP_DEFLATED)
-                z.write(pp, arcname=e["name"], compress_type=kind)
+                z.write(pp, arcname=e["name"])
         self.zip_size = zp.stat().st_size
         self.zip_path = zp
         if self.mode == "zip":
             self.size = self.zip_size
         return zp
 
-    def send_request_json(self, sender_id: str, sender_name: str) -> dict:
+    def send_request_json(self, sender_id: str, sender_name: str, base_url: str = "") -> dict:
+        b_url = base_url or self.base_url
         req: dict = {
             "id": self.task_id,
             "senderId": sender_id,
@@ -86,9 +85,9 @@ class TransferTask:
             "totalSize": self.size,
             "file": self.entries,
         }
-        if self.base_url:
+        if b_url:
             req["fileUrl"] = "##".join(
-                f"{self.base_url}/downloadFile?taskId={self.task_id}&token={self.token}&index={i}"
+                f"{b_url}/downloadFile?taskId={self.task_id}&token={self.token}&index={i}"
                 for i in range(self.file_count)
             )
         return req

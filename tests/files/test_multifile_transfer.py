@@ -214,5 +214,145 @@ class FetchTaskFilesTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(saved), 2)
         self.assertEqual(seen, [(3, 1), (5, 2)])
 
+class PcToPhoneMultiFileSvc2Test(unittest.IsolatedAsyncioTestCase):
+    async def test_pc_to_phone_multifile_push_zip_and_protocol_handshake(self) -> None:
+        import asyncio
+        import json
+        import re
+        import ssl
+        import urllib.parse
+        from samyuj.session.lifecycle import SamyujRuntime
+        from samyuj.services.applist import _parse_ft_line
+        from samyuj.transport.websocket import ws_frame
+
+        with tempfile.TemporaryDirectory(prefix="sc-pcpush-") as td:
+            td_path = Path(td)
+            src_dir = td_path / "src_files"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            f1 = src_dir / "alpha.txt"
+            f2 = src_dir / "beta.bin"
+            f3 = src_dir / "gamma.md"
+            f1.write_bytes(b"Alpha file contents 12345")
+            f2.write_bytes(b"\x00\x01\x02Beta binary payload\xff")
+            f3.write_bytes(b"Gamma markdown\nMulti-file transfer test\n")
+
+            rt = SamyujRuntime(host="127.0.0.1", port=0, out_dir=str(td_path / "out"), state_dir=str(td_path / "state"), media=False)
+            sent_frames: list[str] = []
+
+            async def _capture_ws(conn, text_frame: str, tag: str = "") -> bool:
+                sent_frames.append(text_frame)
+                return True
+
+            rt._send_ws_text = _capture_ws
+            fake_conn = {"peer": "127.0.0.1:54321", "remote_ip": "127.0.0.1", "tasks": []}
+            rt._live_ws = lambda: fake_conn
+
+            task = await rt.send_files_svc2(fake_conn, [str(f1), str(f2), str(f3)])
+            self.assertIsNotNone(task)
+            try:
+                self.assertEqual(task.file_count, 3)
+                self.assertEqual(task.mode, "zip")
+                self.assertEqual(task.logical_size, f1.stat().st_size + f2.stat().st_size + f3.stat().st_size)
+                self.assertEqual(task.size, task.zip_path.stat().st_size)
+                self.assertEqual(len(sent_frames), 1)
+                announce = json.loads(sent_frames[0])
+                self.assertEqual(announce["serviceId"], 2)
+                self.assertEqual(announce["data"]["cmd"], 1)
+                xfer_port = int(announce["data"]["port"])
+                self.assertEqual(xfer_port, rt.xfer_port)
+
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+
+                reader, writer = await asyncio.open_connection("127.0.0.1", xfer_port, ssl=ctx, server_hostname="127.0.0.1")
+                try:
+                    status, rest = await rt._ws_upgrade_plain(
+                        reader, writer, f"127.0.0.1:{xfer_port}", "/websocket",
+                    )
+                    self.assertTrue(status.startswith("HTTP/1.1 101"), status)
+                    wbuf = bytearray(rest)
+                    vn_line = await rt._read_ws_text(reader, timeout=5.0, buf=wbuf)
+                    kind, mid, name, _payload = _parse_ft_line(vn_line)
+                    self.assertEqual((kind, name), ("action", "versionNegotiation"))
+
+                    ack_vn = f'ack:{mid}:versionNegotiation?{{"version":1,"token":"{task.token}"}}'
+                    writer.write(ws_frame(0x1, ack_vn.encode("utf-8"), mask=True))
+                    await writer.drain()
+
+                    sr_line = await rt._read_ws_text(reader, timeout=5.0, buf=wbuf)
+                    kind_sr, mid_sr, name_sr, sr_payload = _parse_ft_line(sr_line)
+                    self.assertEqual((kind_sr, name_sr), ("action", "sendRequest"))
+                    self.assertEqual(sr_payload["fileCount"], 3)
+                    self.assertEqual(sr_payload["id"], task.task_id)
+                    self.assertEqual(sr_payload["totalSize"], task.size)
+                    self.assertEqual(
+                        [e["size"] for e in sr_payload["file"]],
+                        [f1.stat().st_size, f2.stat().st_size, f3.stat().st_size],
+                    )
+                    urls = [u for u in sr_payload["fileUrl"].split("##") if u]
+                    self.assertEqual(len(urls), 3)
+
+                    writer.write(ws_frame(0x1, f"ack:{mid_sr}:sendRequest".encode("utf-8"), mask=True))
+                    await writer.drain()
+
+                    parsed_u = urllib.parse.urlsplit(urls[0])
+                    hd_r, hd_w = await asyncio.open_connection("127.0.0.1", xfer_port, ssl=ctx, server_hostname="127.0.0.1")
+                    try:
+                        req_h = f"HEAD /download?{parsed_u.query} HTTP/1.1\r\nHost: 127.0.0.1:{xfer_port}\r\nConnection: close\r\n\r\n"
+                        hd_w.write(req_h.encode("utf-8"))
+                        await hd_w.drain()
+                        raw_hd = await asyncio.wait_for(hd_r.read(), timeout=5.0)
+                        self.assertIn(b"200 OK", raw_hd.splitlines()[0])
+                        mh = re.search(rb"(?i)Content-Length: (\d+)", raw_hd)
+                        self.assertIsNotNone(mh)
+                        self.assertEqual(int(mh.group(1)), task.size)
+                    finally:
+                        hd_w.close()
+
+                    dl_r, dl_w = await asyncio.open_connection("127.0.0.1", xfer_port, ssl=ctx, server_hostname="127.0.0.1")
+                    try:
+                        req_g = f"GET /download?{parsed_u.query} HTTP/1.1\r\nHost: 127.0.0.1:{xfer_port}\r\nConnection: close\r\n\r\n"
+                        dl_w.write(req_g.encode("utf-8"))
+                        await dl_w.drain()
+                        raw_resp = await asyncio.wait_for(dl_r.read(), timeout=5.0)
+                        hdr_b, body_b = raw_resp.split(b"\r\n\r\n", 1)
+                        self.assertIn(b"200 OK", hdr_b.splitlines()[0])
+                        self.assertEqual(len(body_b), task.size)
+                        with zipfile.ZipFile(io.BytesIO(body_b)) as zf:
+                            self.assertEqual(sorted(zf.namelist()), ["alpha.txt", "beta.bin", "gamma.md"])
+                            self.assertEqual(zf.read("alpha.txt"), f1.read_bytes())
+                            self.assertEqual(zf.read("beta.bin"), f2.read_bytes())
+                            self.assertEqual(zf.read("gamma.md"), f3.read_bytes())
+                    finally:
+                        dl_w.close()
+
+                    prog_frame = f'action:Client1020:status?{{"taskId":"{task.task_id}","type":0,"reason":"{task.size}"}}'
+                    writer.write(ws_frame(0x1, prog_frame.encode("utf-8"), mask=True))
+                    await writer.drain()
+
+                    msg_data = [
+                        {"name": "alpha.txt", "mimeType": "text/plain", "size": f1.stat().st_size, "dir": False, "index": 0, "filePath": "/storage/emulated/0/Download/alpha.txt"},
+                        {"name": "beta.bin", "mimeType": "", "size": f2.stat().st_size, "dir": False, "index": 1, "filePath": "/storage/emulated/0/Download/beta.bin"},
+                        {"name": "gamma.md", "mimeType": "text/markdown", "size": f3.stat().st_size, "dir": False, "index": 2, "filePath": "/storage/emulated/0/Download/gamma.md"},
+                    ]
+                    msg_frame = "action:Client1023:message?" + json.dumps({"msgId": 1, "length": 3, "data": msg_data}, separators=(",", ":"))
+                    writer.write(ws_frame(0x1, msg_frame.encode("utf-8"), mask=True))
+                    await writer.drain()
+
+                    st_frame = f'action:Client1024:status?{{"taskId":"{task.task_id}","type":1,"reason":"success"}}'
+                    writer.write(ws_frame(0x1, st_frame.encode("utf-8"), mask=True))
+                    await writer.drain()
+                    ack_st = await rt._read_ws_text(reader, timeout=5.0, buf=wbuf)
+                    self.assertEqual(ack_st, "ack:Client1024:status")
+                    self.assertEqual(task.phase, "success")
+                    self.assertEqual(len(task.saved_paths), 3)
+                finally:
+                    writer.close()
+            finally:
+                if rt._xfer_srv is not None:
+                    rt._xfer_srv.close()
+                    await rt._xfer_srv.wait_closed()
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import shutil
+import subprocess
 import time
 import urllib.parse
 from pathlib import Path
 
-from samyuj.ui.gtk.gtk_compat import Gdk, GdkPixbuf, GLib, Gtk, Pango
+from samyuj.ui.gtk.gtk_compat import Gdk, GLib, Gtk, Pango
 
 from samyuj.ui.gtk.assets import (
+    extract_dropped_paths,
     load_concept_pixbuf,
     make_cairo_icon,
     open_dialog_nonblocking,
@@ -20,6 +23,8 @@ class SharingPageMixin:
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
 
         head = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        eb = Gtk.Label(label="FILE SHARE (SVC-2)", xalign=0.0)
+        eb.get_style_context().add_class("eyebrow")
         h1 = Gtk.Label(label="Share", xalign=0.0)
         h1.get_style_context().add_class("page-h1")
         self.sharing_sub_lbl = Gtk.Label(
@@ -27,6 +32,8 @@ class SharingPageMixin:
             xalign=0.0,
         )
         self.sharing_sub_lbl.get_style_context().add_class("page-sub")
+        self.sharing_sub_lbl.set_line_wrap(True)
+        head.pack_start(eb, False, False, 0)
         head.pack_start(h1, False, False, 0)
         head.pack_start(self.sharing_sub_lbl, False, False, 0)
         vbox.pack_start(head, False, False, 0)
@@ -46,11 +53,13 @@ class SharingPageMixin:
         )
         drop_box.pack_start(ico_wrap, False, False, 0)
 
-        dz_title = Gtk.Label(label="Drag and drop files or folders here")
+        dz_title = Gtk.Label(label="Drag and drop files or folders here to send")
         dz_title.get_style_context().add_class("dropzone-title")
         drop_box.pack_start(dz_title, False, False, 0)
 
-        dz_sub = Gtk.Label(label="Drop multiple files to send them to your phone, or drop folders to mount them via NFS")
+        dz_sub = Gtk.Label(
+            label="Sends files directly to your phone's Download folder via Motorola Smart Connect file transfer (svc-2)"
+        )
         dz_sub.get_style_context().add_class("dropzone-sub")
         dz_sub.set_line_wrap(True)
         drop_box.pack_start(dz_sub, False, False, 0)
@@ -66,7 +75,20 @@ class SharingPageMixin:
         choose_folder_btn.get_style_context().add_class("secondary-btn")
         choose_folder_btn.connect("clicked", lambda *_: self._choose_and_share_folders())
         btn_row.pack_start(choose_folder_btn, False, False, 0)
+
+        open_recv_btn = Gtk.Button(label="Open Received Folder")
+        open_recv_btn.get_style_context().add_class("secondary-btn")
+        open_recv_btn.connect("clicked", self._on_open_received_folder_clicked)
+        btn_row.pack_start(open_recv_btn, False, False, 0)
         drop_box.pack_start(btn_row, False, False, 4)
+
+        self.sharing_status_lbl = Gtk.Label(
+            label=f"Incoming phone files are saved to {self.facade.get_incoming_files_dir()}",
+            xalign=0.5,
+        )
+        self.sharing_status_lbl.get_style_context().add_class("panel-sub")
+        self.sharing_status_lbl.set_line_wrap(True)
+        drop_box.pack_start(self.sharing_status_lbl, False, False, 2)
 
         targets = [
             Gtk.TargetEntry.new("text/uri-list", 0, 1),
@@ -78,12 +100,16 @@ class SharingPageMixin:
         vbox.pack_start(drop_eb, False, False, 0)
 
         sh_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        sh_h2 = Gtk.Label(label="Shared folders & files", xalign=0.0)
+        sh_h2 = Gtk.Label(label="Recent file transfers (PC ↔ Phone)", xalign=0.0)
         sh_h2.get_style_context().add_class("panel-h2")
         self.folder_count_lbl = Gtk.Label(label="0 items", xalign=1.0)
         self.folder_count_lbl.get_style_context().add_class("panel-sub")
+        clear_xfer_btn = Gtk.Button(label="Clear history")
+        clear_xfer_btn.get_style_context().add_class("clear-btn")
+        clear_xfer_btn.connect("clicked", self._on_clear_shared_files_clicked)
         sh_hdr.pack_start(sh_h2, True, True, 0)
-        sh_hdr.pack_end(self.folder_count_lbl, False, False, 0)
+        sh_hdr.pack_end(clear_xfer_btn, False, False, 0)
+        sh_hdr.pack_end(self.folder_count_lbl, False, False, 4)
         vbox.pack_start(sh_hdr, False, False, 2)
 
         list_scroll = Gtk.ScrolledWindow()
@@ -98,22 +124,45 @@ class SharingPageMixin:
 
         return vbox
 
-    def _on_share_drag_data_received(self, _widget, _drag_ctx, _x, _y, sel_data, _info, _time) -> None:
-        uris: list[str] = list(sel_data.get_uris() or [])
-        if not uris:
-            raw_txt = sel_data.get_text() or ""
-            uris = [ln.strip() for ln in raw_txt.splitlines() if ln.strip() and not ln.startswith("#")]
-        paths: list[Path] = []
-        for u in uris:
-            if u.startswith("file://"):
-                parsed = urllib.parse.unquote(urllib.parse.urlsplit(u).path)
-                p = Path(parsed)
-            else:
-                p = Path(u).expanduser()
-            if p.exists():
-                paths.append(p.resolve())
+    def _on_open_received_folder_clicked(self, *_args) -> None:
+        recv_dir = str(self.facade.get_incoming_files_dir())
+        for cmd in (["xdg-open", recv_dir], ["gio", "open", recv_dir]):
+            if shutil.which(cmd[0]):
+                with contextlib.suppress(OSError):
+                    subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    return
+
+    def _on_clear_shared_files_clicked(self, *_args) -> None:
+        self._shared_Custom_files.clear()
+        if hasattr(self.facade, "recv_files") and isinstance(self.facade.recv_files, list):
+            self.facade.recv_files.clear()
+        self._refresh_shares_list(force=True)
+
+    def _on_share_drag_data_received(self, _widget, drag_ctx, _x, _y, sel_data, info, time_val) -> None:
+        extracted = extract_dropped_paths(sel_data, info)
+        if not extracted:
+            uris: list[str] = list(sel_data.get_uris() or [])
+            if not uris:
+                raw_txt = sel_data.get_text() or ""
+                uris = [ln.strip() for ln in raw_txt.splitlines() if ln.strip() and not ln.startswith("#")]
+            for u in uris:
+                if u.startswith("file://"):
+                    parsed = urllib.parse.unquote(urllib.parse.urlsplit(u).path)
+                    p = Path(parsed)
+                else:
+                    p = Path(u).expanduser()
+                if p.exists():
+                    extracted.append(p.resolve())
+        paths = [Path(p).expanduser().resolve() for p in extracted if Path(p).expanduser().exists()]
         if paths:
             self.handle_shared_paths(paths)
+        with contextlib.suppress(Exception):
+            Gtk.drag_finish(drag_ctx, bool(paths), False, time_val)
 
     def handle_shared_paths(self, paths: list[Path | str]) -> dict:
         dirs: list[Path] = []
@@ -122,37 +171,103 @@ class SharingPageMixin:
             p = Path(raw_p).expanduser().resolve()
             if p.is_dir():
                 dirs.append(p)
+                files.extend(sorted(q for q in p.rglob("*") if q.is_file())[:200])
             elif p.is_file():
                 files.append(p)
 
-        for d in dirs:
-            self._spawn(self.facade.nfs_add_share(d.name, str(d), access_mode="rw", reannounce=True))
+        seen_paths: set[str] = set()
+        unique_files: list[Path] = []
+        for f in files:
+            sp = str(f)
+            if sp not in seen_paths:
+                seen_paths.add(sp)
+                unique_files.append(f)
 
-        if files:
-            for f in files:
-                with contextlib.suppress(OSError):
-                    dst = self.facade.export_dir / f.name
-                    if dst.resolve() != f.resolve():
-                        import shutil as _sh
-                        if f.stat().st_size <= 256 * 1024:
-                            _sh.copy2(f, dst)
-                        else:
-                            self._spawn(asyncio.to_thread(_sh.copy2, f, dst))
-                self._shared_Custom_files.append({
+        if unique_files:
+            now_ts = time.time()
+            batch_records: list[dict] = []
+            for idx_f, f in enumerate(unique_files):
+                try:
+                    sz = f.stat().st_size
+                except OSError:
+                    sz = 0
+                rec = {
                     "name": f.name,
                     "path": str(f),
-                    "size": f.stat().st_size,
-                    "ts": time.time(),
-                })
-            if hasattr(self.facade, "send_files_svc2"):
-                self._spawn(self.facade.send_files_svc2([str(f) for f in files]))
+                    "size": sz,
+                    "ts": now_ts,
+                    "direction": "sent",
+                    "task_id": "",
+                    "file_index": idx_f,
+                    "status": "Sending…",
+                }
+                self._shared_Custom_files.append(rec)
+                batch_records.append(rec)
 
-        GLib.timeout_add(150, lambda: (self._refresh_shares_list(force=True), False)[1])
-        return {"ok": True, "dirs": [str(d) for d in dirs], "files": [str(f) for f in files]}
+            async def _do_send_svc2(file_paths: list[str], records: list[dict]) -> None:
+                c = self.facade._live_ws() if hasattr(self.facade, "_live_ws") else None
+                task = None
+                if hasattr(self.facade, "send_files_svc2"):
+                    task = await self.facade.send_files_svc2(c, file_paths)
+                if task is not None:
+                    tid = str(getattr(task, "task_id", "") or "")
+                    for r in records:
+                        r["task_id"] = tid
+                        r["status"] = "Sending to phone…"
+                    if getattr(self, "sharing_status_lbl", None) is not None:
+                        GLib.idle_add(
+                            self.sharing_status_lbl.set_text,
+                            f"Sending {len(file_paths)} file(s) ({getattr(task, 'size', 0) // 1024 or 1} KB) to {self.facade._best_device_name()}…",
+                        )
+                    GLib.idle_add(self._refresh_shares_list, True)
+                    for _ in range(240):
+                        await asyncio.sleep(0.25)
+                        phase = str(getattr(task, "phase", "announced") or "announced")
+                        if phase == "success":
+                            for r in records:
+                                r["status"] = "Sent to phone"
+                            if getattr(self, "sharing_status_lbl", None) is not None:
+                                GLib.idle_add(
+                                    self.sharing_status_lbl.set_text,
+                                    f"Sent {len(file_paths)} file(s) to {self.facade._best_device_name()} (/sdcard/Download)",
+                                )
+                            GLib.idle_add(self._refresh_shares_list, True)
+                            return
+                        if phase == "failed":
+                            for r in records:
+                                r["status"] = "Transfer failed"
+                            if getattr(self, "sharing_status_lbl", None) is not None:
+                                GLib.idle_add(
+                                    self.sharing_status_lbl.set_text,
+                                    f"Transfer failed for {len(file_paths)} file(s) — click Resend to try again",
+                                )
+                            GLib.idle_add(self._refresh_shares_list, True)
+                            return
+                    if str(getattr(task, "phase", "")) in ("announced", "negotiating", "request_sent", "downloading"):
+                        for r in records:
+                            r["status"] = "Sent / Ready on phone"
+                        GLib.idle_add(self._refresh_shares_list, True)
+                else:
+                    for r in records:
+                        r["status"] = "Queued (connect phone)"
+                    if getattr(self, "sharing_status_lbl", None) is not None:
+                        GLib.idle_add(
+                            self.sharing_status_lbl.set_text,
+                            "No phone connected yet — connect your phone and click Resend.",
+                        )
+                    GLib.idle_add(self._refresh_shares_list, True)
+
+            self._spawn(_do_send_svc2([str(f) for f in unique_files], batch_records))
+
+        GLib.timeout_add(100, lambda: (self._refresh_shares_list(force=True), False)[1])
+        return {"ok": True, "dirs": [str(d) for d in dirs], "files": [str(f) for f in unique_files]}
+
+    def _on_send_files_dialog(self, *_args) -> None:
+        self._choose_and_send_files()
 
     def _choose_and_send_files(self) -> None:
         dlg = Gtk.FileChooserDialog(
-            title="Select one or more files to share with your phone",
+            title="Select one or more files to send to your phone",
             parent=self.win,
             action=Gtk.FileChooserAction.OPEN,
         )
@@ -168,7 +283,7 @@ class SharingPageMixin:
 
     def _choose_and_share_folders(self) -> None:
         dlg = Gtk.FileChooserDialog(
-            title="Select folder(s) to share with your phone",
+            title="Select folder(s) to send to your phone",
             parent=self.win,
             action=Gtk.FileChooserAction.SELECT_FOLDER,
         )
@@ -182,10 +297,45 @@ class SharingPageMixin:
                 [Path(fn) for fn in (d.get_filenames() or [])])
             if d.get_filenames() else None)
 
+    def _resend_shared_file(self, fpath: str) -> None:
+        p = Path(fpath).expanduser()
+        if p.exists():
+            self._shared_Custom_files = [x for x in self._shared_Custom_files if x.get("path") != fpath]
+            self.handle_shared_paths([p])
+
+    def _open_local_file_path(self, fpath: str) -> None:
+        for cmd in (["xdg-open", fpath], ["gio", "open", fpath]):
+            if shutil.which(cmd[0]):
+                with contextlib.suppress(OSError):
+                    subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    return
+
     def _refresh_shares_list(self, force: bool = False) -> None:
         shares = self.facade.nfs_list_shares().get("shares", []) if hasattr(self.facade, "nfs_list_shares") else []
-        sig = (tuple((s.get("alias"), s.get("host_path"), s.get("access_mode")) for s in shares),
-               tuple(f["path"] for f in self._shared_Custom_files))
+        recv_list = list(getattr(self.facade, "recv_files", []) or [])
+        xfer_tasks = getattr(self.facade, "xfer_tasks", {}) or {}
+        for f_item in self._shared_Custom_files:
+            tid = f_item.get("task_id")
+            if tid and tid in xfer_tasks:
+                t_obj = xfer_tasks[tid]
+                ph = str(getattr(t_obj, "phase", "") or "")
+                saved_p = getattr(t_obj, "saved_paths", {}) or {}
+                f_idx = f_item.get("file_index")
+                if ph == "success" or (f_idx is not None and f_idx in saved_p):
+                    f_item["status"] = "Sent to phone"
+                elif ph == "failed":
+                    f_item["status"] = "Transfer failed"
+
+        sig = (
+            tuple((s.get("alias"), s.get("host_path"), s.get("access_mode")) for s in shares),
+            tuple((f.get("path"), f.get("status")) for f in self._shared_Custom_files),
+            tuple(recv_list[-25:]),
+        )
         if not force and sig == self._last_shares_sig:
             return
         self._last_shares_sig = sig
@@ -193,55 +343,51 @@ class SharingPageMixin:
         for ch in list(self.shared_list_box.get_children()):
             self.shared_list_box.remove(ch)
 
-        total_items = len(shares) + len(self._shared_Custom_files)
-        self.folder_count_lbl.set_text(f"{total_items} item{'' if total_items == 1 else 's'}")
+        total_items = len(self._shared_Custom_files) + len(recv_list)
+        self.folder_count_lbl.set_text(f"{total_items} transfer{'' if total_items == 1 else 's'}")
 
-        for s in shares:
-            alias = str(s.get("alias") or "")
-            hpath = str(s.get("host_path") or "")
+        if getattr(self, "sharing_status_lbl", None) is not None:
+            last_st = str(getattr(self.facade, "xfer_last_status", "") or "").strip()
+            if last_st:
+                self.sharing_status_lbl.set_text(last_st)
+
+        if total_items == 0:
+            empty_lbl = Gtk.Label(
+                label="No files sent or received yet — drag files above or click 'Choose files…' to send to your phone.",
+                xalign=0.0,
+            )
+            empty_lbl.set_line_wrap(True)
+            empty_lbl.get_style_context().add_class("panel-sub")
+            self.shared_list_box.pack_start(empty_lbl, False, False, 6)
+
+        for f_item in reversed(list(self._shared_Custom_files)):
+            fname = str(f_item.get("name") or "")
+            fpath = str(f_item.get("path") or "")
+            fsize_kb = max(1, int(f_item.get("size") or 0) // 1024)
+            fstatus = str(f_item.get("status") or "Sent to phone")
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
             row.get_style_context().add_class("notif-row")
-            row.pack_start(Gtk.Label(label="DIR"), False, False, 4)
-
-            det = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            t_lbl = Gtk.Label(label=alias, xalign=0.0)
-            t_lbl.get_style_context().add_class("notif-title")
-            s_lbl = Gtk.Label(label=f"{hpath} · Read, write and delete", xalign=0.0)
-            s_lbl.get_style_context().add_class("panel-sub")
-            det.pack_start(t_lbl, False, False, 0)
-            det.pack_start(s_lbl, False, False, 0)
-            row.pack_start(det, True, True, 0)
-
-            badge = Gtk.Label(label="Shared")
-            badge.get_style_context().add_class("shared-badge")
-            row.pack_start(badge, False, False, 4)
-
-            rm_btn = Gtk.Button(label="x")
-            rm_btn.get_style_context().add_class("corner-cancel-btn")
-            rm_btn.connect("clicked", lambda *_, al=alias: self._remove_share_alias(al))
-            row.pack_end(rm_btn, False, False, 0)
-            self.shared_list_box.pack_start(row, False, False, 0)
-
-        for f_item in list(self._shared_Custom_files):
-            fname = f_item["name"]
-            fpath = f_item["path"]
-            fsize_kb = max(1, f_item["size"] // 1024)
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-            row.get_style_context().add_class("notif-row")
-            row.pack_start(Gtk.Label(label="FILE"), False, False, 4)
+            row.pack_start(Gtk.Label(label="SENT"), False, False, 4)
 
             det = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             t_lbl = Gtk.Label(label=fname, xalign=0.0)
             t_lbl.get_style_context().add_class("notif-title")
-            s_lbl = Gtk.Label(label=f"{fpath} · {fsize_kb} KB", xalign=0.0)
+            t_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            s_lbl = Gtk.Label(label=f"{fpath} · {fsize_kb} KB · PC → Phone", xalign=0.0)
             s_lbl.get_style_context().add_class("panel-sub")
+            s_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             det.pack_start(t_lbl, False, False, 0)
             det.pack_start(s_lbl, False, False, 0)
             row.pack_start(det, True, True, 0)
 
-            badge = Gtk.Label(label="Shared file")
+            badge = Gtk.Label(label=fstatus)
             badge.get_style_context().add_class("sent-badge")
             row.pack_start(badge, False, False, 4)
+
+            resend_btn = Gtk.Button(label="Resend")
+            resend_btn.get_style_context().add_class("secondary-btn")
+            resend_btn.connect("clicked", lambda *_, fp=fpath: self._resend_shared_file(fp))
+            row.pack_start(resend_btn, False, False, 2)
 
             rm_btn = Gtk.Button(label="x")
             rm_btn.get_style_context().add_class("corner-cancel-btn")
@@ -249,7 +395,40 @@ class SharingPageMixin:
             row.pack_end(rm_btn, False, False, 0)
             self.shared_list_box.pack_start(row, False, False, 0)
 
+        for rpath_str in reversed(recv_list[-25:]):
+            rp = Path(str(rpath_str))
+            rname = rp.name
+            try:
+                rsize_kb = max(1, rp.stat().st_size // 1024) if rp.exists() else 1
+            except OSError:
+                rsize_kb = 1
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.get_style_context().add_class("notif-row")
+            row.pack_start(Gtk.Label(label="RECV"), False, False, 4)
+
+            det = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            t_lbl = Gtk.Label(label=rname, xalign=0.0)
+            t_lbl.get_style_context().add_class("notif-title")
+            t_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            s_lbl = Gtk.Label(label=f"{rp} · {rsize_kb} KB · Phone → PC", xalign=0.0)
+            s_lbl.get_style_context().add_class("panel-sub")
+            s_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            det.pack_start(t_lbl, False, False, 0)
+            det.pack_start(s_lbl, False, False, 0)
+            row.pack_start(det, True, True, 0)
+
+            badge = Gtk.Label(label="Received")
+            badge.get_style_context().add_class("shared-badge")
+            row.pack_start(badge, False, False, 4)
+
+            open_btn = Gtk.Button(label="Open")
+            open_btn.get_style_context().add_class("secondary-btn")
+            open_btn.connect("clicked", lambda *_, fp=str(rp): self._open_local_file_path(fp))
+            row.pack_end(open_btn, False, False, 0)
+            self.shared_list_box.pack_start(row, False, False, 0)
+
         self.shared_list_box.show_all()
+
         if getattr(self, "files_nfs_shares_box", None) is not None:
             for ch in list(self.files_nfs_shares_box.get_children()):
                 self.files_nfs_shares_box.remove(ch)
@@ -275,12 +454,13 @@ class SharingPageMixin:
                 frow.pack_end(frm_btn, False, False, 0)
                 self.files_nfs_shares_box.pack_start(frow, False, False, 0)
             self.files_nfs_shares_box.show_all()
-        names_preview = [f"{s.get('alias')} ({s.get('host_path')})" for s in shares]
-        self.files_shared_summary_lbl.set_text(
-            ("Exported to phone via NFS: " + " · ".join(names_preview))
-            if names_preview
-            else "No PC folders exported via NFS yet — add a Linux directory path below."
-        )
+        if getattr(self, "files_shared_summary_lbl", None) is not None:
+            names_preview = [f"{s.get('alias')} ({s.get('host_path')})" for s in shares]
+            self.files_shared_summary_lbl.set_text(
+                ("Exported to phone via NFS: " + " · ".join(names_preview))
+                if names_preview
+                else "No PC folders exported via NFS yet — add a Linux directory path below."
+            )
 
     def _on_add_nfs_path_clicked(self, *_args) -> None:
         raw_path = (self.nfs_export_path_entry.get_text() if getattr(self, "nfs_export_path_entry", None) else "").strip()

@@ -858,7 +858,21 @@ class TrayPopoverGtkWindow(Gtk.Window):
 
         drop_btn = Gtk.Button(label="Drop files here to send to your phone")
         drop_btn.get_style_context().add_class("dropzone")
-        drop_btn.connect("clicked", lambda *_: self.app._on_send_files_dialog() if hasattr(self.app, "_on_send_files_dialog") else None)
+        drop_btn.connect(
+            "clicked",
+            lambda *_: self.app._choose_and_send_files()
+            if hasattr(self.app, "_choose_and_send_files")
+            else None,
+        )
+        with contextlib.suppress(Exception):
+            targets = [
+                Gtk.TargetEntry.new("text/uri-list", 0, 1),
+                Gtk.TargetEntry.new("STRING", 0, 2),
+                Gtk.TargetEntry.new("text/plain", 0, 3),
+            ]
+            drop_btn.drag_dest_set(Gtk.DestDefaults.ALL, targets, Gdk.DragAction.COPY)
+            if hasattr(self.app, "_on_share_drag_data_received"):
+                drop_btn.connect("drag-data-received", self.app._on_share_drag_data_received)
         self._body_box.pack_start(drop_btn, False, False, 0)
 
         notifs = list(getattr(self.facade, "notifications", []) or [])

@@ -190,7 +190,7 @@ class FilesPageMixin:
         browse_nfs_btn = Gtk.Button(label="Browse Folder...")
         browse_nfs_btn.get_style_context().add_class("secondary-btn")
         browse_nfs_btn.set_valign(Gtk.Align.CENTER)
-        browse_nfs_btn.connect("clicked", lambda *_: self._choose_and_share_folders())
+        browse_nfs_btn.connect("clicked", lambda *_: self._choose_and_add_nfs_folders())
         s_top.pack_end(browse_nfs_btn, False, False, 0)
         shared_summary_card.pack_start(s_top, False, False, 0)
 
@@ -220,6 +220,29 @@ class FilesPageMixin:
         vbox.pack_end(shared_summary_card, False, False, 0)
 
         return vbox
+
+    def _choose_and_add_nfs_folders(self) -> None:
+        dlg = Gtk.FileChooserDialog(
+            title="Select Linux folder(s) to export to your phone via NFSv3",
+            parent=self.win,
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
+        )
+        dlg.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN, Gtk.ResponseType.OK,
+        )
+        dlg.set_select_multiple(True)
+
+        def _on_picked(d) -> None:
+            for fn in (d.get_filenames() or []):
+                p = Path(fn).expanduser().resolve()
+                if p.is_dir():
+                    async def _add_one(dir_p: Path):
+                        await self.facade.nfs_add_share(dir_p.name or "Share", str(dir_p), access_mode="rw", reannounce=True)
+                        GLib.idle_add(self._refresh_shares_list, True)
+                    self._spawn(_add_one(p))
+
+        open_dialog_nonblocking(dlg, on_ok=_on_picked)
 
     def _on_mount_phone_nfs_clicked(self, *_args) -> None:
         if getattr(self, "_phonefs_attaching", False):

@@ -93,8 +93,8 @@ class AppsPageMixin:
             self.apps_tab_query,
             tuple(str(a.get("name")) for a in running),
             tuple((str(a.get("name")), bool(a.get("pinned"))) for a in catalog[:48]),
-            getattr(self, "ui_theme", "tray"),
-            getattr(self, "color_palette", "carbon"),
+            getattr(self, "ui_theme", "aurora"),
+            getattr(self, "color_palette", "mocha"),
             getattr(self, "icon_style", "minimal"),
             bool(getattr(self, "dark_mode", True)),
         )
